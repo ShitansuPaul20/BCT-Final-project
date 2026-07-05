@@ -1,12 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { useSelector, useDispatch } from 'react-redux'
 import { useChat } from '../hooks/useChat'
+import { getSocket } from '../service/chat.socket'
 import { createNewChat, addNewMessage, setCurrentChatId } from '../chat.slice'
-import { Send, Mic, Plus, User, RotateCcw, Sparkles, BookOpen } from 'lucide-react'
+import { Send, Mic, Plus, User, RotateCcw, Sparkles, BookOpen, ListChecks } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import MermaidDiagram from './MermaidDiagram'
+import QuizWidget from './QuizWidget'
 
-// Custom AI Logo
 const AILogo = () => (
     <div className="w-7 h-7 rounded-full bg-green-600 flex items-center justify-center shrink-0 p-1">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white">
@@ -45,6 +46,8 @@ const ChatArea = () => {
     const { user } = useSelector(state => state.auth)
 
     const [input, setInput] = useState('')
+    // Quiz state — key: message._id, value: { loading, questions, error }
+    const [quizzes, setQuizzes] = useState({})
     const messagesEndRef = useRef(null)
     const textareaRef = useRef(null)
 
@@ -56,7 +59,6 @@ const ChatArea = () => {
         ? chats[currentChatId].title
         : 'New Chat'
 
-    // Jab bhi chat switch ho (naya select karo ya doosri chat kholo), draft input clear kar do
     useEffect(() => {
         setInput('')
     }, [currentChatId])
@@ -85,20 +87,15 @@ const ChatArea = () => {
             dispatch(addNewMessage({ chatId: tempId, content: message, role: 'user' }))
             try {
                 await handleSendMessage(message, null, tempId, user?._id)
-            } catch {
-                // error state mein already set hai
-            }
+            } catch { }
         } else {
             dispatch(addNewMessage({ chatId: currentChatId, content: message, role: 'user' }))
             try {
                 await handleSendMessage(message, currentChatId, null, user?._id)
-            } catch {
-                // error state mein already set hai
-            }
+            } catch { }
         }
     }
 
-    // Regenerate / Simpler / Detailed / Related-topic-click — sab isi function se hote hain
     const handleQuickAction = async (actionType, topic) => {
         if (!topic || isloading) return
         let newMessage = topic
@@ -108,16 +105,48 @@ const ChatArea = () => {
         } else if (actionType === 'detailed') {
             newMessage = `Explain "${topic}" again but in more depth and technical detail.`
         }
-        // actionType === 'regenerate' → same topic dubara bhej do as-is
 
-        if (!currentChatId) return // safety — is button ke liye currentChatId hamesha hona chahiye
+        if (!currentChatId) return
 
         dispatch(addNewMessage({ chatId: currentChatId, content: newMessage, role: 'user' }))
         try {
             await handleSendMessage(newMessage, currentChatId, null, user?._id)
-        } catch {
-            // error state mein already set hai
+        } catch { }
+    }
+
+    const handleGenerateQuiz = (topic, msgId) => {
+        if (!topic || !msgId) return
+        const socket = getSocket()
+        if (!socket) return
+
+        setQuizzes(prev => ({ ...prev, [msgId]: { loading: true, questions: null, error: null } }))
+
+        const onQuizReady = ({ requestId, questions }) => {
+            if (requestId !== msgId) return
+            setQuizzes(prev => ({ ...prev, [msgId]: { loading: false, questions, error: null } }))
+            cleanup()
         }
+        const onQuizError = ({ requestId, message: errMsg }) => {
+            if (requestId !== msgId) return
+            setQuizzes(prev => ({ ...prev, [msgId]: { loading: false, questions: null, error: errMsg } }))
+            cleanup()
+        }
+        function cleanup() {
+            socket.off("quiz_ready", onQuizReady)
+            socket.off("quiz_error", onQuizError)
+        }
+
+        socket.on("quiz_ready", onQuizReady)
+        socket.on("quiz_error", onQuizError)
+        socket.emit("generate_quiz", { topic, requestId: msgId })
+    }
+
+    const handleCloseQuiz = (msgId) => {
+        setQuizzes(prev => {
+            const updated = { ...prev }
+            delete updated[msgId]
+            return updated
+        })
     }
 
     const handleKeyDown = (e) => {
@@ -130,7 +159,6 @@ const ChatArea = () => {
     return (
         <div className="flex-1 flex flex-col h-full min-w-0 bg-[#141414]">
 
-            {/* Top Bar */}
             <div className="flex items-center justify-between px-5 py-4 border-b border-white/8">
                 <span className="text-white/50 text-sm truncate">{currentChatTitle}</span>
                 <div className="w-8 h-8 rounded-full bg-white/15 flex items-center justify-center text-white/70 text-xs font-medium shrink-0">
@@ -138,7 +166,6 @@ const ChatArea = () => {
                 </div>
             </div>
 
-            {/* Messages */}
             <div className="flex-1 overflow-y-auto px-4 py-6 space-y-5 custom-scrollbar min-h-0">
 
                 {!currentChatId && currentMessages.length === 0 && (
@@ -170,13 +197,19 @@ const ChatArea = () => {
                         ? currentMessages[index - 1].content
                         : null
 
+                    const msgId = msg._id || index
+                    const quizState = quizzes[msgId]
+
                     return (
                         <MessageBubble
-                            key={msg._id || index}
+                            key={msgId}
                             message={msg}
                             precedingUserMsg={precedingUserMsg}
                             onAction={handleQuickAction}
                             disabled={isloading}
+                            quizState={quizState}
+                            onGenerateQuiz={() => handleGenerateQuiz(precedingUserMsg, msgId)}
+                            onCloseQuiz={() => handleCloseQuiz(msgId)}
                         />
                     )
                 })}
@@ -197,7 +230,6 @@ const ChatArea = () => {
                 <div ref={messagesEndRef} />
             </div>
 
-            {/* Input */}
             <div className="px-4 pb-5 pt-3">
                 <div className="bg-[#1c1c1c] border border-white/12 rounded-2xl px-4 py-3
                                 focus-within:border-white/25 transition-colors duration-200">
@@ -243,7 +275,7 @@ const ChatArea = () => {
     )
 }
 
-const MessageBubble = ({ message, precedingUserMsg, onAction, disabled }) => {
+const MessageBubble = ({ message, precedingUserMsg, onAction, disabled, quizState, onGenerateQuiz, onCloseQuiz }) => {
     const isUser = message.role === 'user'
 
     return (
@@ -315,7 +347,36 @@ const MessageBubble = ({ message, precedingUserMsg, onAction, disabled }) => {
                                 >
                                     <BookOpen size={13} />
                                 </button>
+                                {!quizState?.questions && (
+                                    <button
+                                        onClick={onGenerateQuiz}
+                                        disabled={disabled || quizState?.loading}
+                                        title="Test yourself"
+                                        className="p-1.5 rounded-lg bg-white/5 hover:bg-white/15 text-white/40 hover:text-white/80 transition-colors disabled:opacity-30"
+                                    >
+                                        <ListChecks size={13} />
+                                    </button>
+                                )}
                             </div>
+                        )}
+
+                        {quizState?.loading && (
+                            <div className="mt-3 flex items-center gap-2 text-white/40 text-xs">
+                                <div className="flex gap-1">
+                                    <span className="w-1 h-1 bg-white/40 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                                    <span className="w-1 h-1 bg-white/40 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                                    <span className="w-1 h-1 bg-white/40 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                                </div>
+                                Generating quiz...
+                            </div>
+                        )}
+
+                        {quizState?.error && (
+                            <p className="mt-3 text-red-400/70 text-xs">{quizState.error}</p>
+                        )}
+
+                        {quizState?.questions && (
+                            <QuizWidget questions={quizState.questions} onClose={onCloseQuiz} />
                         )}
                     </>
                 )}

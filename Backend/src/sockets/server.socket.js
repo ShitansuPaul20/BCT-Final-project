@@ -1,7 +1,7 @@
 const { Server } = require("socket.io")
 const chatModel = require("../models/chat.model")
 const messageModel = require("../models/message.model")
-const { generateChatTitle, streamConceptExplanation, parseConceptResponse } = require("../services/ai.service")
+const { generateChatTitle, streamConceptExplanation, parseConceptResponse, generateQuiz } = require("../services/ai.service")
 
 let io;
 
@@ -161,6 +161,19 @@ function initSocket(httpServer) {
             }
         })
 
+        socket.on("generate_quiz", async ({ topic, requestId }) => {
+            try {
+                const questions = await generateQuiz(topic);
+                if (!questions || questions.length === 0) {
+                    socket.emit("quiz_error", { requestId, message: "Quiz nahi ban paya, dubara try karo." });
+                    return;
+                }
+                socket.emit("quiz_ready", { requestId, topic, questions });
+            } catch (error) {
+                console.error("Quiz generation error:", error);
+                socket.emit("quiz_error", { requestId, message: "Quiz generate karte waqt error aaya." });
+            }
+        });
         socket.on("disconnect", () => {
             console.log("User disconnected: " + socket.id)
         })

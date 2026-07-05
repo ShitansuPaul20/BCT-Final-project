@@ -164,9 +164,86 @@ async function generateChatTitle(message) {
   return response.content;
 }
 
+const QUIZ_SYSTEM_PROMPT = `You are a CS professor creating a short quiz to test understanding of a topic.
+
+Given a topic, generate EXACTLY 3 multiple-choice questions in this EXACT format and nothing else:
+
+###QUIZ###
+Q: <question 1>
+A) <option A>
+B) <option B>
+C) <option C>
+D) <option D>
+CORRECT: <A, B, C, or D>
+---
+Q: <question 2>
+A) <option A>
+B) <option B>
+C) <option C>
+D) <option D>
+CORRECT: <A, B, C, or D>
+---
+Q: <question 3>
+A) <option A>
+B) <option B>
+C) <option C>
+D) <option D>
+CORRECT: <A, B, C, or D>
+###END###
+
+Rules:
+- Exactly 3 questions, no more, no less
+- Each question must have exactly 4 options (A, B, C, D)
+- Only one correct answer per question
+- Keep questions concise and test real understanding, not trivial recall
+- Do not include any text outside this format`;
+
+function parseQuiz(raw) {
+  const text = raw.trim();
+  const quizMatch = text.match(/###QUIZ###([\s\S]*?)###END###/);
+  const body = quizMatch ? quizMatch[1] : text;
+
+  const blocks = body.split('---').map(b => b.trim()).filter(Boolean);
+  const questions = [];
+
+  for (const block of blocks) {
+    const qMatch = block.match(/Q:\s*(.+)/);
+    const aMatch = block.match(/A\)\s*(.+)/);
+    const bMatch = block.match(/B\)\s*(.+)/);
+    const cMatch = block.match(/C\)\s*(.+)/);
+    const dMatch = block.match(/D\)\s*(.+)/);
+    const correctMatch = block.match(/CORRECT:\s*([A-D])/i);
+
+    if (qMatch && aMatch && bMatch && cMatch && dMatch && correctMatch) {
+      questions.push({
+        question: qMatch[1].trim(),
+        options: {
+          A: aMatch[1].trim(),
+          B: bMatch[1].trim(),
+          C: cMatch[1].trim(),
+          D: dMatch[1].trim(),
+        },
+        correct: correctMatch[1].toUpperCase(),
+      });
+    }
+  }
+
+  return questions;
+}
+
+async function generateQuiz(topic) {
+  const response = await Geminimodel.invoke([
+    new SystemMessage(QUIZ_SYSTEM_PROMPT),
+    new HumanMessage(`Create a quiz for this topic: ${topic}`),
+  ]);
+
+  return parseQuiz(response.content);
+}
+
 module.exports = {
   generateResponse,
   generateChatTitle,
   streamConceptExplanation,
   parseConceptResponse,
+  generateQuiz,
 };
